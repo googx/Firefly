@@ -1,24 +1,38 @@
-from transformers import AutoTokenizer, BitsAndBytesConfig
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# --------------------------------------------------
+# File Name: train_qlora.py
+# Author: hanxu
+# AuthorSite: http://www.googx.top/
+# GitSource: https://github.com/googx/linuxShell
+# Created Time: 202023/8/14-下午5:07
+# ---------------------说明--------------------------
+#
+# ---------------------------------------------------
+
+
+import argparse
+import os
+from collections import defaultdict
+from os.path import join
+
+import bitsandbytes as bnb
+import torch
+from loguru import logger
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from transformers import AutoTokenizer, BitsAndBytesConfig
 from transformers import (
     set_seed,
     HfArgumentParser,
     TrainingArguments,
     AutoModelForCausalLM
 )
-import argparse
-from loguru import logger
-import os
-from os.path import join
-import torch
-import bitsandbytes as bnb
-from collections import defaultdict
 
+from component.argument import QLoRAArguments
 from component.collator import SFTDataCollator
 from component.dataset import SFTDataset, ChatGLM2SFTDataset
-from component.argument import QLoRAArguments
-from component.trainer import LoRATrainer
 from component.loss import TargetLMLoss
+from component.trainer import LoRATrainer
 
 
 def verify_model_dtype(model):
@@ -75,8 +89,12 @@ def find_all_linear_names(model):
 
 
 def setup_everything():
+    # 参数解析
     parser = argparse.ArgumentParser()
-    parser.add_argument("--train_args_file", type=str, default='train_args/baichuan-sft-qlora.json', help="")
+    parser.add_argument("--train_args_file",
+                        type=str,
+                        default='train_args/baichuan-sft-qlora.json',
+                        help="")
     args = parser.parse_args()
     train_args_file = args.train_args_file
     # 读取训练的参数配置
@@ -111,25 +129,32 @@ def init_components(args, training_args):
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name_or_path,
         device_map=device_map,
-        load_in_4bit=True,
-        torch_dtype=torch.float16,
-        trust_remote_code=True,
-        quantization_config=BitsAndBytesConfig(
+        load_in_4bit=True,  # 以4位量化加载模型
+        torch_dtype=torch.float16,  # 使用16位半精度浮点数进行计算
+        trust_remote_code=True,  # 信任从远程加载的代码,是Hugging Face Transformers库中的一个参数，
+        # 用于控制是否信任从远程位置加载的代码。当使用预训练模型时，通常会从Hugging Face的模型仓库或其他远程位置下载模型权重和配置等信息。
+        quantization_config=BitsAndBytesConfig(  # 量化配置
             load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.float16,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-            llm_int8_threshold=6.0,
-            llm_int8_has_fp16_weight=False,
+            bnb_4bit_compute_dtype=torch.float16,  # 4位量化计算使用16位半精度浮点数
+            bnb_4bit_use_double_quant=True,  # 使用双重量化
+            bnb_4bit_quant_type="nf4",  # 非线性4位量化
+            llm_int8_threshold=6.0,  # LLM整数量化阈值
+            llm_int8_has_fp16_weight=False,  # LLM整数量化中没有16位半精度浮点数权重
         ),
     )
     # 加载tokenzier
+    # 使用AutoTokenizer自动选择适当的分词器
+    # 在Hugging Face Transformers库中，AutoTokenizer是一个用于自动选择适当分词器（Tokenizer）的类。
+    # 分词器用于将文本输入转换为模型可以理解的标记（tokens），这些标记通常是词汇的小单元，如单词或子词。
+    # AutoTokenizer允许您根据要使用的预训练模型的名称或路径，自动选择对应的分词器。
+    # 这在处理不同类型的模型（如BERT、GPT-2、RoBERTa等）时非常有用，因为不同模型可能需要不同的分词方法。
     tokenizer = AutoTokenizer.from_pretrained(
         args.model_name_or_path,
         trust_remote_code=True,
         # llama不支持fast
         use_fast=False if model.config.model_type == 'llama' else True
     )
+    #  不同模型的分词器 不同处理
     # QWenTokenizer比较特殊，pad_token_id、bos_token_id、eos_token_id均为None。eod_id对应的token为<|endoftext|>
     if tokenizer.__class__.__name__ == 'QWenTokenizer':
         tokenizer.pad_token_id = tokenizer.eod_id
@@ -152,8 +177,10 @@ def init_components(args, training_args):
     #     raise Exception('pad_token_id should not be equal to eos_token_id')
 
     # casts all the non int8 modules to full precision (fp32) for stability
+
+    #  准备开始训练
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=training_args.gradient_checkpointing)
-    print(f'memory footprint of model: {model.get_memory_footprint()/(1024*1024*1024)} GB')
+    print(f'memory footprint of model: {model.get_memory_footprint() / (1024 * 1024 * 1024)} GB')
     # 找到所有需要插入adapter的全连接层
     target_modules = find_all_linear_names(model)
     # 初始化lora配置
@@ -176,6 +203,7 @@ def init_components(args, training_args):
     loss_func = TargetLMLoss(ignore_index=-100)
 
     # 指加载训练集
+    print(f"加载训练集:(loading model(type:{model.config.model_type}) training data: {args.train_file})")
     if model.config.model_type == 'chatglm':
         train_dataset = ChatGLM2SFTDataset(args.train_file, tokenizer, args.max_seq_length)
     else:
@@ -214,5 +242,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
