@@ -7,9 +7,9 @@ import torch
 
 
 def merge_lora_to_base_model():
-    model_name_or_path = 'baichuan-inc/baichuan-7B'
-    adapter_name_or_path = 'YeungNLP/firefly-baichuan-7b-qlora-sft'
-    save_path = 'checkpoint/firefly-baichuan-7b-qlora-sft-merge'
+    model_name_or_path = '/mnt/sda/Qwen-7B-Chat/'
+    adapter_name_or_path = '/home/hanxu/Firefly/output/firefly-qwen-7b'
+    save_path = '/mnt/sda/output/test1_merge'
 
     config = AutoConfig.from_pretrained(model_name_or_path)
     tokenizer = AutoTokenizer.from_pretrained(
